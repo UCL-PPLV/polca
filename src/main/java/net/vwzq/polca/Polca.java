@@ -22,11 +22,9 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 import java.util.Arrays;
-import java.util.Random;
-import java.util.Map;
-import java.util.HashMap;
+
 import org.apache.commons.cli.*;
-import javax.annotation.Nullable;
+
 import java.io.PrintStream;
 
 import de.learnlib.api.algorithm.LearningAlgorithm;
@@ -306,20 +304,20 @@ public final class Polca {
 		Alphabet<String> abstractInputAlphabet = Alphabets.fromArray(alphabet);
 
         // instantiate test driver
-		CacheSUL memSul = new CacheSUL(this.config, abstractInputAlphabet);
-		CacheSUL eqSul = new CacheSUL(this.config, abstractInputAlphabet);
+		NoiseCacheSUL memSul = new NoiseCacheSUL(this.config, abstractInputAlphabet);
+		NoiseCacheSUL eqSul = new NoiseCacheSUL(this.config, abstractInputAlphabet);
         System.out.println("-------------------------------------------------------");
 
 
 		// Membership Queries
-		CacheSULOracle sulMemOracle = new CacheSULOracle(memSul, this.config, "mq");
+		NoiseCacheSULOracle sulMemOracle = new NoiseCacheSULOracle(memSul, this.config, "mq");
 		MealyCounterOracle<String, String> statsMemOracle = new MealyCounterOracle<String, String>(sulMemOracle, "membership queries");
 		MealyCacheOracle<String, String> cachedMemOracle = MealyCaches.createDAGCache(abstractInputAlphabet, statsMemOracle);
 		MealyCounterOracle<String, String> statsCachedMemOracle = new MealyCounterOracle<String, String>(cachedMemOracle, "membership queries hit cache");
 		MembershipOracle.MealyMembershipOracle<String, String> effMemOracle = this.config.no_cache ? statsMemOracle : statsCachedMemOracle;
 
 		// Equivalence Queries
-		CacheSULOracle sulEqOracle = new CacheSULOracle(eqSul, this.config, "eq");
+		NoiseCacheSULOracle sulEqOracle = new NoiseCacheSULOracle(eqSul, this.config, "eq");
 		MealyCounterOracle<String, String> statsEqOracle = new MealyCounterOracle<String, String>(sulEqOracle, "equivalence queries");
 		MealyCacheOracle<String, String> cachedEqOracle = MealyCaches.createDAGCache(abstractInputAlphabet, statsEqOracle);
 		MealyCounterOracle<String, String> statsCachedEqOracle = new MealyCounterOracle<String, String>(cachedEqOracle, "equivalence queries hit cache");
@@ -329,26 +327,26 @@ public final class Polca {
 		LearningAlgorithm<MealyMachine<?, String, ?, String>, String, Word<String>> learn;
 		switch (this.config.learner) {
 			case TTT:
-				learn = new TTTLearnerMealyBuilder<String, String>().withAlphabet(abstractInputAlphabet).withOracle(effMemOracle).withAnalyzer(AcexAnalyzers.LINEAR_FWD).create();
+				learn = new TTTLearnerMealyBuilder<String, String>().withAlphabet(abstractInputAlphabet).withOracle(statsMemOracle).withAnalyzer(AcexAnalyzers.LINEAR_FWD).create();
 				break;
 			case DHC:
-				learn = new MealyDHC<String, String>(abstractInputAlphabet, effMemOracle);
+				learn = new MealyDHC<String, String>(abstractInputAlphabet, statsMemOracle);
 				break;
 			case KV:
-				learn = new KearnsVaziraniMealy<String, String>(abstractInputAlphabet, effMemOracle, true, AcexAnalyzers.LINEAR_FWD);
+				learn = new KearnsVaziraniMealy<String, String>(abstractInputAlphabet, statsMemOracle, true, AcexAnalyzers.LINEAR_FWD);
 				break;
 			case MP:
-				learn = new MalerPnueliMealy<String, String>(abstractInputAlphabet, effMemOracle);
+				learn = new MalerPnueliMealy<String, String>(abstractInputAlphabet, statsMemOracle);
 				break;
 			case RS:
-				learn = new RivestSchapireMealy<String, String>(abstractInputAlphabet, effMemOracle);
+				learn = new RivestSchapireMealy<String, String>(abstractInputAlphabet, statsMemOracle);
 				break;
 			case DT:
-				learn = new DTLearnerMealy<String, String>(abstractInputAlphabet, effMemOracle, LocalSuffixFinders.RIVEST_SCHAPIRE, true);
+				learn = new DTLearnerMealy<String, String>(abstractInputAlphabet, statsMemOracle, LocalSuffixFinders.RIVEST_SCHAPIRE, true);
 				break;
 			case LSTAR:
 			default:
-				learn = new ExtensibleLStarMealyBuilder<String,String>().withAlphabet(abstractInputAlphabet).withOracle(effMemOracle).create();
+				learn = new ExtensibleLStarMealyBuilder<String,String>().withAlphabet(abstractInputAlphabet).withOracle(statsMemOracle).create();
 			break;
 		}
 
