@@ -9,7 +9,7 @@ import java.util.List;
 import net.automatalib.words.WordBuilder;
 import de.learnlib.api.SUL;
 import net.automatalib.words.Alphabet;
-import net.automatalib.words.impl.SimpleAlphabet;
+import net.automatalib.words.impl.ListAlphabet;
 import net.automatalib.words.Word;
 import de.learnlib.api.exception.SULException;
 
@@ -66,7 +66,7 @@ public class CacheSUL implements SUL<String, String> {
 
 	public CacheSUL(Config config, Alphabet<String> abstractAlphabet) throws Exception {
 		this.config = config;
-		this.concreteAlphabet = new SimpleAlphabet<String>(Arrays.asList("abcdefghijklmnopqrstuvwxyz".substring(0,config.ways+1).split("")));
+		this.concreteAlphabet = new ListAlphabet<String>(Arrays.asList("abcdefghijklmnopqrstuvwxyz".substring(0,config.ways+1).split("")));
 		this.abstractAlphabet = abstractAlphabet;
 		this.cache = instantiateCache(this.config);
 		this.numQueries = 0;

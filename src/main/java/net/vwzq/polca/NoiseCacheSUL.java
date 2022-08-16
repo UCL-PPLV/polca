@@ -5,7 +5,7 @@ import de.learnlib.api.exception.SULException;
 import net.automatalib.words.Alphabet;
 import net.automatalib.words.Word;
 import net.automatalib.words.WordBuilder;
-import net.automatalib.words.impl.SimpleAlphabet;
+import net.automatalib.words.impl.ListAlphabet;
 
 import java.util.*;
 
@@ -62,7 +62,7 @@ public class NoiseCacheSUL implements SUL<String, String> {
 
 	public NoiseCacheSUL(Config config, Alphabet<String> abstractAlphabet) throws Exception {
 		this.config = config;
-		this.concreteAlphabet = new SimpleAlphabet<String>(Arrays.asList("abcdefghijklmnopqrstuvwxyz".substring(0,config.ways+1).split("")));
+		this.concreteAlphabet = new ListAlphabet<String>(Arrays.asList("abcdefghijklmnopqrstuvwxyz".substring(0,config.ways+1).split("")));
 		this.abstractAlphabet = abstractAlphabet;
 		this.cache = instantiateCache(this.config);
 		this.numQueries = 0;

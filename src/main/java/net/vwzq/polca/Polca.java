@@ -178,7 +178,7 @@ public final class Polca {
 		options.addOption(new Option("miss_ratio", true, "ratio of misses to consider a MISS (default: 0.2)"));
 		options.addOption(new Option("limit", true, "NEW"));
 		options.addOption(new Option("revision_ratio", true, "NEW"));
-		options.addOption(new Option("length_ratio", true, "NEW"));
+		options.addOption(new Option("length_factor", true, "NEW"));
 		// learning settings
 		options.addOption(new Option("m", "max_size", true, "maximum number of states of SUL"));
 		options.addOption(new Option("r_min", true, "minimal length of random word (default: 10)"));
