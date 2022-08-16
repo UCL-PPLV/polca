@@ -16,66 +16,43 @@
 package net.vwzq.polca;
 
 import java.io.IOException;
-import java.lang.reflect.Method;
-import java.util.ArrayDeque;
-import java.util.ArrayList;
-import java.util.Deque;
 import java.util.List;
+import java.util.Random;
 import java.util.Arrays;
 
 import org.apache.commons.cli.*;
 
 import java.io.PrintStream;
 
-import de.learnlib.api.algorithm.LearningAlgorithm;
-import de.learnlib.algorithms.discriminationtree.mealy.DTLearnerMealy;
-import de.learnlib.counterexamples.LocalSuffixFinders;
-import de.learnlib.algorithms.dhc.mealy.MealyDHC;
 import de.learnlib.algorithms.kv.mealy.KearnsVaziraniMealy;
-import de.learnlib.algorithms.rivestschapire.RivestSchapireMealy;
-import de.learnlib.algorithms.malerpnueli.MalerPnueliMealy;
-import de.learnlib.algorithms.lstar.mealy.ExtensibleLStarMealy;
 import de.learnlib.algorithms.lstar.mealy.ExtensibleLStarMealyBuilder;
-import de.learnlib.counterexamples.AcexLocalSuffixFinder;
-import de.learnlib.acex.analyzers.AcexAnalyzers;
+import de.learnlib.algorithms.malerpnueli.MalerPnueliMealy;
+import de.learnlib.algorithms.rivestschapire.RivestSchapireMealy;
 import de.learnlib.algorithms.ttt.mealy.TTTLearnerMealyBuilder;
-import de.learnlib.algorithms.ttt.mealy.TTTLearnerMealy;
-import de.learnlib.api.SUL;
+import de.learnlib.api.algorithm.LearningAlgorithm;
 import de.learnlib.api.oracle.MembershipOracle;
-import de.learnlib.api.algorithm.LearningAlgorithm.MealyLearner;
 import de.learnlib.api.oracle.EquivalenceOracle.MealyEquivalenceOracle;
-import de.learnlib.oracle.equivalence.RandomWpMethodEQOracle;
-import de.learnlib.api.statistic.StatisticSUL;
-import de.learnlib.drivers.reflect.MethodInput;
-import de.learnlib.drivers.reflect.MethodOutput;
-import de.learnlib.drivers.reflect.SimplePOJOTestDriver;
-import de.learnlib.filter.cache.sul.SULCaches;
-import de.learnlib.filter.statistic.sul.ResetCounterSUL;
-import de.learnlib.oracle.equivalence.mealy.RandomWalkEQOracle;
-import de.learnlib.oracle.equivalence.WpMethodEQOracle;
-import de.learnlib.oracle.membership.SULOracle;
-import de.learnlib.api.oracle.MembershipOracle;
-import de.learnlib.util.Experiment.MealyExperiment;
+import de.learnlib.api.query.DefaultQuery;
+import de.learnlib.counterexamples.LocalSuffixFinders;
+import de.learnlib.acex.analyzers.AcexAnalyzers;
+import de.learnlib.algorithms.continuous.base.PAS;
+import de.learnlib.algorithms.dhc.mealy.MealyDHC;
+import de.learnlib.algorithms.discriminationtree.mealy.DTLearnerMealy;
+import de.learnlib.filter.cache.mealy.MealyCacheOracle;
+import de.learnlib.filter.cache.mealy.MealyCaches;
+import de.learnlib.filter.statistic.oracle.MealyCounterOracle;
+import de.learnlib.oracle.equivalence.MealyEQOracleChain;
+import de.learnlib.oracle.equivalence.MealyRandomWpMethodEQOracle;
+import de.learnlib.oracle.equivalence.MealyWpMethodEQOracle;
 import de.learnlib.util.statistics.SimpleProfiler;
 import net.automatalib.automata.transducers.MealyMachine;
+import net.automatalib.automata.transducers.impl.compact.CompactMealy;
+import net.automatalib.commons.util.Pair;
 import net.automatalib.serialization.dot.GraphDOT;
 import net.automatalib.visualization.Visualization;
-import de.learnlib.mapper.api.SULMapper;
-import de.learnlib.mapper.SULMappers;
-import net.automatalib.words.Word;
 import net.automatalib.words.Alphabet;
-import net.automatalib.words.impl.Alphabets;
-import de.learnlib.drivers.reflect.ReturnValue;
-import de.learnlib.drivers.reflect.Error;
-import de.learnlib.api.query.DefaultQuery;
 import net.automatalib.words.Word;
-import net.automatalib.words.WordBuilder;
-import de.learnlib.api.exception.SULException;
-import de.learnlib.filter.statistic.oracle.CounterOracle.MealyCounterOracle;
-import de.learnlib.filter.cache.mealy.MealyCacheOracle;
-import net.automatalib.incremental.ConflictException;
-import de.learnlib.filter.cache.mealy.MealyCaches;
-import de.learnlib.oracle.equivalence.EQOracleChain.MealyEQOracleChain;
+import net.automatalib.words.impl.Alphabets;
 
 enum PolicyType {
 	LRU,
@@ -92,6 +69,7 @@ enum PolicyType {
 }
 
 enum LearnAlgorithmType {
+	PAS,
 	LSTAR,
 	TTT,
 	KV,
@@ -121,6 +99,10 @@ class Config {
 	public int max_size;
 	public LearnAlgorithmType learner;
 	public int votes;
+	public int limit;
+	public double revision_ratio;
+	public double length_factor;
+	public float noise;
 
 	public Config (CommandLine cmd) throws Exception {
 		this.max_depth = Integer.parseInt(cmd.getOptionValue("depth", "1"));
@@ -135,6 +117,14 @@ class Config {
 		this.votes = Integer.parseInt(cmd.getOptionValue("votes", "1"));
 		this.prefix = cmd.getOptionValue("prefix", "@");
 		this.is_hw = false;
+		this.noise = Float.parseFloat(cmd.getOptionValue("n", "0"));
+		if (!cmd.hasOption("limit") || !cmd.hasOption("revision_ratio") || !cmd.hasOption("length_factor")) {
+			throw new Exception("missing new flags");
+		}
+		this.limit = Integer.parseInt(cmd.getOptionValue("limit"));
+		this.revision_ratio = Double.parseDouble(cmd.getOptionValue("revision_ratio"));
+		this.length_factor = Double.parseDouble(cmd.getOptionValue("length_factor"));
+
 		switch (cmd.getOptionValue("policy", "fifo").toLowerCase()) {
 			case "hw":
 				this.policy = PolicyType.HW;
@@ -173,7 +163,11 @@ class Config {
 			default:
 				throw new Exception("unsupported policy");
 		}
-		switch (cmd.getOptionValue("learner", "kv").toLowerCase()) {
+
+		switch (cmd.getOptionValue("learner", "pas").toLowerCase()) {
+			case "pas":
+				this.learner = LearnAlgorithmType.PAS;
+				break;
 			case "ttt":
 				this.learner = LearnAlgorithmType.TTT;
 				break;
@@ -231,6 +225,7 @@ public final class Polca {
 		options.addOption(new Option("w", "ways", true, "cache associativity (default: 4)"));
 		options.addOption(new Option("p", "policy", true, "simulator cache policy: fifo|lru|plru|lip|plip|mru|srriphp|srripfp|new1|new2|hw (default: 'fifo')"));
 		options.addOption(new Option("b", "binary", true, "path to proxy for 'hw' policy"));
+		options.addOption(new Option("n", "noise", true, "probability of noise"));
 		// general
 		options.addOption(new Option("o", "output", true, "write learnt .dot model into output file"));
 		// other
@@ -239,8 +234,11 @@ public final class Polca {
 		options.addOption(new Option("votes", true, "number of votes for deciding result (default: 1)"));
 		options.addOption(new Option("hit_ratio", true, "ratio of hits to consider a HIT (default: 0.8)"));
 		options.addOption(new Option("miss_ratio", true, "ratio of misses to consider a MISS (default: 0.2)"));
+		options.addOption(new Option("limit", true, "NEW"));
+		options.addOption(new Option("revision_ratio", true, "NEW"));
+		options.addOption(new Option("length_factor", true, "NEW"));
 		// learning settings
-		options.addOption(new Option("l", "learner", true, "learning algorithm lstar|kv|mp|rs|dhc|dt|ttt (default: 'kv')"));
+		options.addOption(new Option("l", "learner", true, "learning algorithm pas|lstar|kv|mp|rs|dhc|dt|ttt (default: 'pas')"));
 		options.addOption(new Option("m", "max_size", true, "maximum number of states of SUL"));
 		options.addOption(new Option("r_min", true, "minimal length of random word (default: 10)"));
 		options.addOption(new Option("r_len", true, "expected length of random word (r_min + r_len) (default: 30)"));
@@ -293,67 +291,126 @@ public final class Polca {
 
 	public void run() throws Exception {
 
-		// abstract alphabet
-		String[] alphabet = {
+		String[] alphabet1 = {
 			"h(0)", "h(1)", "h(2)", "h(3)", "h(4)", "h(5)", "h(6)", "h(7)", "h(8)",
 			"h(9)", "h(10)", "h(11)", "h(12)", "h(13)", "h(14)", "h(15)", "h(16)", "h(17)",
 			"h(18)", "h(19)", "h(20)", "h(21)", "h(22)", "h(23)", "h(24)", "h(25)", "h(26)",
 		};
-		alphabet = Arrays.copyOfRange(alphabet, 0, this.config.ways+1);
-		alphabet[alphabet.length-1] = "m()";
-		Alphabet<String> abstractInputAlphabet = Alphabets.fromArray(alphabet);
+		alphabet1 = Arrays.copyOfRange(alphabet1, 0, this.config.ways+1);
+		alphabet1[alphabet1.length-1] = "m()";
+		Alphabet<String> abstractInputAlphabet1 = Alphabets.fromArray(alphabet1);
+		Alphabet<String> alphabet = abstractInputAlphabet1;
 
-        // instantiate test driver
-		NoiseCacheSUL memSul = new NoiseCacheSUL(this.config, abstractInputAlphabet);
-		NoiseCacheSUL eqSul = new NoiseCacheSUL(this.config, abstractInputAlphabet);
+		CacheSUL cacheSul = new CacheSUL(this.config, alphabet);
+		CacheSULOracle cacheSulOracle = new CacheSULOracle(cacheSul, this.config, "mq", this.config.noise);
+		MealyCounterOracle<String, String> queryOracle = new MealyCounterOracle<>(cacheSulOracle, "Number of total queries");
+		
+		MealyMachine<?, String, ?, String> hyp;
+
+		if (this.config.learner == LearnAlgorithmType.PAS)	{
+			Random random = new Random();
+			random.setSeed(System.nanoTime());
+
+			PAS learn = new PAS(sulOracle -> new KearnsVaziraniMealy<String, String>(alphabet, sulOracle, true,
+         		AcexAnalyzers.BINARY_SEARCH_BWD), queryOracle, alphabet, this.config.limit * 2, this.config.revision_ratio, this.config.length_factor, random);
+			
+			List<Pair<Integer, CompactMealy<String, String>>> result = learn.run();
+			hyp = result.get(result.size()-1).getSecond();
+		}
+		else 
+			hyp = activeLearning(cacheSul, queryOracle, alphabet, this.config.noise);
+
+		if (this.config.temp_model) {
+			try {
+				PrintStream fileOut = new PrintStream(".model.tmp");
+				GraphDOT.write(hyp, alphabet, fileOut); // may throw IOException!
+				fileOut.close();
+			} catch (IOException e) {}
+		}
+
+        if (!this.config.silent) System.out.println("-------------------------------------------------------");
+		SimpleProfiler.stop("learn");
+		System.out.println("\t" + SimpleProfiler.getResults());
+        System.out.println("-------------------------------------------------------");
+		System.out.println("--> Hypothesis: " + hyp.getStates() + " - " + hyp.size());
+        System.out.println("-------------------------------------------------------");
+//		System.out.println("Total HW queries: " + totalHwQueries);
+		System.out.println("Summary Statistics: ");
+		System.out.println("\t" + queryOracle.getStatisticalData().getSummary());
+
+		if (hyp != null) {
+			// model statistics
+			System.out.println("\ttotal states: " + hyp.size());
+			System.out.println("\talphabet size: " + alphabet.size());
+			System.out.println("-------------------------------------------------------");
+
+			// show model
+			System.out.println();
+			System.out.println("Model: ");
+			if (this.config.output_path.isEmpty()) {
+				Visualization.visualize(hyp, alphabet);
+			} else {
+				PrintStream fileOut = new PrintStream(this.config.output_path);
+				GraphDOT.write(hyp, alphabet, System.out); // may throw IOException!
+				GraphDOT.write(hyp, alphabet, fileOut); // may throw IOException!
+			}
+		}
+
         System.out.println("-------------------------------------------------------");
 
+    }
+
+
+
+	private MealyMachine<?, String, ?, String> activeLearning(CacheSUL cacheSul, MealyCounterOracle queryOracle, Alphabet<String> alphabet, float probability) throws Exception {
+		// instantiate test driver
+		CacheSUL eqSul = new CacheSUL(this.config, alphabet);
+        System.out.println("-------------------------------------------------------");
 
 		// Membership Queries
-		NoiseCacheSULOracle sulMemOracle = new NoiseCacheSULOracle(memSul, this.config, "mq");
-		MealyCounterOracle<String, String> statsMemOracle = new MealyCounterOracle<String, String>(sulMemOracle, "membership queries");
-		MealyCacheOracle<String, String> cachedMemOracle = MealyCaches.createDAGCache(abstractInputAlphabet, statsMemOracle);
+		MealyCounterOracle<String, String> statsMemOracle = new MealyCounterOracle<String, String>(queryOracle, "membership queries");
+		MealyCacheOracle<String, String> cachedMemOracle = MealyCaches.createDAGCache(alphabet, statsMemOracle);
 		MealyCounterOracle<String, String> statsCachedMemOracle = new MealyCounterOracle<String, String>(cachedMemOracle, "membership queries hit cache");
 		MembershipOracle.MealyMembershipOracle<String, String> effMemOracle = this.config.no_cache ? statsMemOracle : statsCachedMemOracle;
 
 		// Equivalence Queries
-		NoiseCacheSULOracle sulEqOracle = new NoiseCacheSULOracle(eqSul, this.config, "eq");
+		CacheSULOracle sulEqOracle = new CacheSULOracle(eqSul, this.config, "eq", probability);
 		MealyCounterOracle<String, String> statsEqOracle = new MealyCounterOracle<String, String>(sulEqOracle, "equivalence queries");
-		MealyCacheOracle<String, String> cachedEqOracle = MealyCaches.createDAGCache(abstractInputAlphabet, statsEqOracle);
+		MealyCacheOracle<String, String> cachedEqOracle = MealyCaches.createDAGCache(alphabet, statsEqOracle);
 		MealyCounterOracle<String, String> statsCachedEqOracle = new MealyCounterOracle<String, String>(cachedEqOracle, "equivalence queries hit cache");
 		MealyEquivalenceOracle<String, String> consistencyEqOracle = cachedMemOracle.createCacheConsistencyTest();
 
-		// Learner from membership oracle
-		LearningAlgorithm<MealyMachine<?, String, ?, String>, String, Word<String>> learn;
+		
+		LearningAlgorithm.MealyLearner<String,String> learn;
 		switch (this.config.learner) {
 			case TTT:
-				learn = new TTTLearnerMealyBuilder<String, String>().withAlphabet(abstractInputAlphabet).withOracle(statsMemOracle).withAnalyzer(AcexAnalyzers.LINEAR_FWD).create();
+				learn = new TTTLearnerMealyBuilder<String, String>().withAlphabet(alphabet).withOracle(effMemOracle).withAnalyzer(AcexAnalyzers.LINEAR_FWD).create();
 				break;
 			case DHC:
-				learn = new MealyDHC<String, String>(abstractInputAlphabet, statsMemOracle);
+				learn = new MealyDHC<String, String>(alphabet, effMemOracle);
 				break;
 			case KV:
-				learn = new KearnsVaziraniMealy<String, String>(abstractInputAlphabet, statsMemOracle, true, AcexAnalyzers.LINEAR_FWD);
+				learn = new KearnsVaziraniMealy<String, String>(alphabet, effMemOracle, true, AcexAnalyzers.LINEAR_FWD);
 				break;
 			case MP:
-				learn = new MalerPnueliMealy<String, String>(abstractInputAlphabet, statsMemOracle);
+				learn = new MalerPnueliMealy<String, String>(alphabet, effMemOracle);
 				break;
 			case RS:
-				learn = new RivestSchapireMealy<String, String>(abstractInputAlphabet, statsMemOracle);
+				learn = new RivestSchapireMealy<String, String>(alphabet, effMemOracle);
 				break;
 			case DT:
-				learn = new DTLearnerMealy<String, String>(abstractInputAlphabet, statsMemOracle, LocalSuffixFinders.RIVEST_SCHAPIRE, true);
+				learn = new DTLearnerMealy<String, String>(alphabet, effMemOracle, LocalSuffixFinders.RIVEST_SCHAPIRE, true);
 				break;
 			case LSTAR:
 			default:
-				learn = new ExtensibleLStarMealyBuilder<String,String>().withAlphabet(abstractInputAlphabet).withOracle(statsMemOracle).create();
+				learn = new ExtensibleLStarMealyBuilder<String,String>().withAlphabet(alphabet).withOracle(effMemOracle).create();
 			break;
+		
 		}
-
-		boolean finished = false, random_ce = true;
+		
+		boolean random_ce = true;
 		MealyMachine<?, String, ?, String> hyp = null;
 		DefaultQuery<String, Word<String>> ce = null;
-		int count = 0;
 
 		// Main learning loop
 		SimpleProfiler.start("learn");
@@ -379,77 +436,40 @@ public final class Polca {
 			if (this.config.temp_model) {
 				try {
 					PrintStream fileOut = new PrintStream(".model.tmp");
-					GraphDOT.write(hyp, abstractInputAlphabet, fileOut); // may throw IOException!
+					GraphDOT.write(hyp, alphabet, fileOut); // may throw IOException!
 					fileOut.close();
 				} catch (IOException e) {}
 			}
 
 			if (this.config.is_random) {
 				if (this.config.no_cache) {
-					MealyEquivalenceOracle<String, String> randomWpMethod = new RandomWpMethodEQOracle.MealyRandomWpMethodEQOracle<>(statsEqOracle, this.config.r_min, this.config.r_len, this.config.r_bound);
-					ce = randomWpMethod.findCounterExample(hyp, abstractInputAlphabet);
+					MealyEquivalenceOracle<String, String> randomWpMethod = new MealyRandomWpMethodEQOracle<>(statsEqOracle, this.config.r_min, this.config.r_len, this.config.r_bound);
+					ce = randomWpMethod.findCounterExample(hyp, alphabet);
 				} else {
-					MealyEquivalenceOracle<String, String> randomWpMethod = new RandomWpMethodEQOracle.MealyRandomWpMethodEQOracle<>(statsCachedEqOracle, this.config.r_min, this.config.r_len, this.config.r_bound);
+					MealyEquivalenceOracle<String, String> randomWpMethod = new MealyRandomWpMethodEQOracle<>(statsCachedEqOracle, this.config.r_min, this.config.r_len, this.config.r_bound);
 					MealyEQOracleChain<String, String> eqOracle = new MealyEQOracleChain<>(consistencyEqOracle, randomWpMethod);
-					ce = eqOracle.findCounterExample(hyp, abstractInputAlphabet);
+					ce = eqOracle.findCounterExample(hyp, alphabet);
 				}
 				random_ce = (ce != null);
 			}
 
 			if (!this.config.is_random || !random_ce) {
 				if (this.config.no_cache) {
-					MealyEquivalenceOracle<String, String> wpMethod = new WpMethodEQOracle.MealyWpMethodEQOracle<>(statsEqOracle, this.config.max_depth);
-					ce = wpMethod.findCounterExample(hyp, abstractInputAlphabet);
+					MealyEquivalenceOracle<String, String> wpMethod = new MealyWpMethodEQOracle<>(statsEqOracle, this.config.max_depth);
+					ce = wpMethod.findCounterExample(hyp, alphabet);
 				} else {
-					MealyEquivalenceOracle<String, String> wpMethod = new WpMethodEQOracle.MealyWpMethodEQOracle<>(statsCachedEqOracle, this.config.max_depth);
+					MealyEquivalenceOracle<String, String> wpMethod = new MealyWpMethodEQOracle<>(statsCachedEqOracle, this.config.max_depth);
 					MealyEQOracleChain<String, String> eqOracle = new MealyEQOracleChain<>(consistencyEqOracle, wpMethod);
-					ce = eqOracle.findCounterExample(hyp, abstractInputAlphabet);
+					ce = eqOracle.findCounterExample(hyp, alphabet);
 				}
 				random_ce = true;
 			}
 
 			if (!this.config.silent) System.out.println("ce : " + ce);
 
-			count++;
-
 		} while (ce != null);
 
-        if (!this.config.silent) System.out.println("-------------------------------------------------------");
-		SimpleProfiler.stop("learn");
-		System.out.println("\t" + SimpleProfiler.getResults());
-        System.out.println("-------------------------------------------------------");
-		System.out.println("--> Hypothesis: " + hyp.getStates() + " - " + hyp.size());
-        System.out.println("-------------------------------------------------------");
-//		System.out.println("Total HW queries: " + totalHwQueries);
-		System.out.println("Summary Statistics: ");
-		System.out.println("\t" + statsCachedMemOracle.getStatisticalData().getSummary());
-		System.out.println("\t" + statsMemOracle.getStatisticalData().getSummary());
-		System.out.println("\treal mem queries to SUL: " + memSul.getNumSULQueries());
-		System.out.println("\t" + statsCachedEqOracle.getStatisticalData().getSummary());
-		System.out.println("\t" + statsEqOracle.getStatisticalData().getSummary());
-		System.out.println("\treal eq queries to SUL: " + eqSul.getNumSULQueries());
-
-		if (hyp != null) {
-			// model statistics
-			System.out.println("\ttotal states: " + hyp.size());
-			System.out.println("\talphabet size: " + abstractInputAlphabet.size());
-			System.out.println("-------------------------------------------------------");
-
-			// show model
-			System.out.println();
-			System.out.println("Model: ");
-			if (this.config.output_path.isEmpty()) {
-				Visualization.visualize(hyp, abstractInputAlphabet);
-			} else {
-				PrintStream fileOut = new PrintStream(this.config.output_path);
-				GraphDOT.write(hyp, abstractInputAlphabet, System.out); // may throw IOException!
-				GraphDOT.write(hyp, abstractInputAlphabet, fileOut); // may throw IOException!
-			}
-		}
-
-        System.out.println("-------------------------------------------------------");
-
-    }
-
+		return hyp;
+	}
 }
 
