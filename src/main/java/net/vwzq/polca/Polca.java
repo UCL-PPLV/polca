@@ -16,10 +16,6 @@
 package net.vwzq.polca;
 
 import java.io.IOException;
-import java.lang.reflect.Method;
-import java.util.ArrayDeque;
-import java.util.ArrayList;
-import java.util.Deque;
 import java.util.List;
 import java.util.Random;
 import java.util.Arrays;
@@ -28,54 +24,19 @@ import org.apache.commons.cli.*;
 
 import java.io.PrintStream;
 
-import de.learnlib.api.algorithm.LearningAlgorithm;
-import de.learnlib.algorithms.discriminationtree.mealy.DTLearnerMealy;
-import de.learnlib.counterexamples.LocalSuffixFinders;
-import de.learnlib.algorithms.dhc.mealy.MealyDHC;
 import de.learnlib.algorithms.kv.mealy.KearnsVaziraniMealy;
-import de.learnlib.algorithms.rivestschapire.RivestSchapireMealy;
-import de.learnlib.algorithms.malerpnueli.MalerPnueliMealy;
-import de.learnlib.algorithms.lstar.mealy.ExtensibleLStarMealy;
-import de.learnlib.algorithms.lstar.mealy.ExtensibleLStarMealyBuilder;
-import de.learnlib.counterexamples.AcexLocalSuffixFinder;
+import de.learnlib.api.SUL;
+import de.learnlib.api.oracle.MembershipOracle.MealyMembershipOracle;
 import de.learnlib.acex.analyzers.AcexAnalyzers;
 import de.learnlib.algorithms.continuous.base.PAS;
-import de.learnlib.algorithms.ttt.mealy.TTTLearnerMealyBuilder;
-import de.learnlib.algorithms.ttt.mealy.TTTLearnerMealy;
-import de.learnlib.api.SUL;
-import de.learnlib.api.oracle.MembershipOracle;
-import de.learnlib.api.algorithm.LearningAlgorithm.MealyLearner;
-import de.learnlib.api.oracle.EquivalenceOracle.MealyEquivalenceOracle;
-import de.learnlib.oracle.equivalence.RandomWpMethodEQOracle;
-import de.learnlib.api.statistic.StatisticSUL;
-import de.learnlib.drivers.reflect.MethodInput;
-import de.learnlib.drivers.reflect.MethodOutput;
-import de.learnlib.drivers.reflect.SimplePOJOTestDriver;
-import de.learnlib.filter.cache.sul.SULCaches;
-import de.learnlib.filter.statistic.sul.ResetCounterSUL;
-import de.learnlib.oracle.equivalence.mealy.RandomWalkEQOracle;
-import de.learnlib.oracle.equivalence.WpMethodEQOracle;
-import de.learnlib.oracle.membership.SULOracle;
-import de.learnlib.util.Experiment.MealyExperiment;
+import de.learnlib.filter.statistic.oracle.MealyCounterOracle;
 import de.learnlib.util.statistics.SimpleProfiler;
-import net.automatalib.automata.transducers.MealyMachine;
+import net.automatalib.automata.transducers.impl.compact.CompactMealy;
+import net.automatalib.commons.util.Pair;
 import net.automatalib.serialization.dot.GraphDOT;
 import net.automatalib.visualization.Visualization;
-import de.learnlib.mapper.api.SULMapper;
-import de.learnlib.mapper.SULMappers;
-import net.automatalib.words.Word;
 import net.automatalib.words.Alphabet;
 import net.automatalib.words.impl.Alphabets;
-import de.learnlib.drivers.reflect.ReturnValue;
-import de.learnlib.drivers.reflect.Error;
-import de.learnlib.api.query.DefaultQuery;
-import net.automatalib.words.WordBuilder;
-import de.learnlib.api.exception.SULException;
-import de.learnlib.filter.statistic.oracle.CounterOracle.MealyCounterOracle;
-import de.learnlib.filter.cache.mealy.MealyCacheOracle;
-import net.automatalib.incremental.ConflictException;
-import de.learnlib.filter.cache.mealy.MealyCaches;
-import de.learnlib.oracle.equivalence.EQOracleChain.MealyEQOracleChain;
 
 enum PolicyType {
 	LRU,
@@ -113,6 +74,7 @@ class Config {
 	public int limit;
 	public double revision_ratio;
 	public double length_factor;
+	public boolean noise;
 
 	public Config (CommandLine cmd) throws Exception {
 		this.max_depth = Integer.parseInt(cmd.getOptionValue("depth", "1"));
@@ -127,7 +89,7 @@ class Config {
 		this.votes = Integer.parseInt(cmd.getOptionValue("votes", "1"));
 		this.prefix = cmd.getOptionValue("prefix", "@");
 		this.is_hw = false;
-
+		this.noise = cmd.hasOption("n");
 		if (!cmd.hasOption("limit") || !cmd.hasOption("revision_ratio") || !cmd.hasOption("length_factor")) {
 			throw new Exception("missing new flags");
 		}
@@ -230,6 +192,7 @@ public final class Polca {
 		options.addOption(new Option("no_cache", false, "don't use cache for membership queries"));
 		options.addOption(new Option("h", "help", false, "show this help message"));
 		options.addOption(new Option("s", "silent", false, "remove stdout info"));
+		options.addOption(new Option("n", "noise", false, "add noise in the oracle"));
 
         CommandLineParser parser = new DefaultParser();
         HelpFormatter formatter = new HelpFormatter();
@@ -280,21 +243,24 @@ public final class Polca {
 		Alphabet<String> abstractInputAlphabet1 = Alphabets.fromArray(alphabet1);
 		Alphabet<String> alphabet = abstractInputAlphabet1;
 
-		CacheSUL memSul = new CacheSUL(this.config, alphabet);
+		SUL<String, String> memSul;
+		MealyMembershipOracle<String, String> cacheSulOracle;
 
-		CacheSULOracle cacheSulOracle = new CacheSULOracle(memSul, this.config, "mq");
+		memSul = this.config.noise ? new NoiseCacheSUL(this.config, alphabet) : new CacheSUL(this.config, alphabet);
+		cacheSulOracle = this.config.noise ? new NoiseCacheSULOracle(memSul, this.config, "mq") : new CacheSULOracle(memSul, this.config, "mq");
+
 		MealyCounterOracle<String, String> queryOracle = new MealyCounterOracle<>(cacheSulOracle, "Number of total queries");
 	
 		Random random = new Random();
 		random.setSeed(System.nanoTime());
 		
 		// Learner from membership oracle
-		PAS learn = new PAS(sulOracle -> new KearnsVaziraniMealy<Character, Character>(alphabet, sulOracle, true,
+		PAS learn = new PAS(sulOracle -> new KearnsVaziraniMealy<String, String>(alphabet, sulOracle, true,
          	AcexAnalyzers.BINARY_SEARCH_BWD), queryOracle, alphabet, this.config.limit * 2, this.config.revision_ratio, this.config.length_factor, random);
 		
-		learn.run();
+		List<Pair<Integer, CompactMealy<String, String>>> result = learn.run();
 
-		hyp = learn.getHypothesisModel();
+		CompactMealy<String, String> hyp = result.get(result.size()-1).getSecond();
 
 		if (this.config.temp_model) {
 			try {

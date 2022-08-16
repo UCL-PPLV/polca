@@ -5,6 +5,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Random;
 
+import de.learnlib.api.SUL;
 import de.learnlib.api.oracle.MembershipOracle.MealyMembershipOracle;
 import de.learnlib.api.query.Query;
 import net.automatalib.words.Alphabet;
@@ -18,8 +19,8 @@ public class NoiseCacheSULOracle implements MealyMembershipOracle<String, String
 	private final String label;
 	private Config config;
 
-    public NoiseCacheSULOracle(NoiseCacheSUL sul, Config conf, String label) {
-        this.sul = sul;
+    public NoiseCacheSULOracle(SUL<String,String> sul, Config conf, String label) {
+        this.sul = (NoiseCacheSUL) sul;
 		this.config = conf;
 		this.label = label;
     }

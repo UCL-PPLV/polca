@@ -20,12 +20,12 @@ public class CacheSULOracle implements MealyMembershipOracle<String, String> {
 	private Config config;
 	static private IncrementalMealyDAGBuilder<String, ArrayList<String>> cache;
 
-    public CacheSULOracle(CacheSUL sul, Config conf, String label) {
-        this.sul = sul;
+    public CacheSULOracle(SUL<String,String> sul, Config conf, String label) {
+        this.sul = (CacheSUL) sul;
 		this.config = conf;
 		this.label = label;
 		if (!this.config.no_cache && this.config.is_hw && this.cache == null) {
-			this.cache = new IncrementalMealyDAGBuilder<>(sul.getAlphabet());
+			this.cache = new IncrementalMealyDAGBuilder<>(this.sul.getAlphabet());
 		}
     }
 
