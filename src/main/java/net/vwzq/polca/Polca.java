@@ -25,16 +25,33 @@ import org.apache.commons.cli.*;
 import java.io.PrintStream;
 
 import de.learnlib.algorithms.kv.mealy.KearnsVaziraniMealy;
-import de.learnlib.api.oracle.MembershipOracle.MealyMembershipOracle;
+import de.learnlib.algorithms.lstar.mealy.ExtensibleLStarMealyBuilder;
+import de.learnlib.algorithms.malerpnueli.MalerPnueliMealy;
+import de.learnlib.algorithms.rivestschapire.RivestSchapireMealy;
+import de.learnlib.algorithms.ttt.mealy.TTTLearnerMealyBuilder;
+import de.learnlib.api.algorithm.LearningAlgorithm;
+import de.learnlib.api.oracle.MembershipOracle;
+import de.learnlib.api.oracle.EquivalenceOracle.MealyEquivalenceOracle;
+import de.learnlib.api.query.DefaultQuery;
+import de.learnlib.counterexamples.LocalSuffixFinders;
 import de.learnlib.acex.analyzers.AcexAnalyzers;
 import de.learnlib.algorithms.continuous.base.PAS;
+import de.learnlib.algorithms.dhc.mealy.MealyDHC;
+import de.learnlib.algorithms.discriminationtree.mealy.DTLearnerMealy;
+import de.learnlib.filter.cache.mealy.MealyCacheOracle;
+import de.learnlib.filter.cache.mealy.MealyCaches;
 import de.learnlib.filter.statistic.oracle.MealyCounterOracle;
+import de.learnlib.oracle.equivalence.MealyEQOracleChain;
+import de.learnlib.oracle.equivalence.MealyRandomWpMethodEQOracle;
+import de.learnlib.oracle.equivalence.MealyWpMethodEQOracle;
 import de.learnlib.util.statistics.SimpleProfiler;
+import net.automatalib.automata.transducers.MealyMachine;
 import net.automatalib.automata.transducers.impl.compact.CompactMealy;
 import net.automatalib.commons.util.Pair;
 import net.automatalib.serialization.dot.GraphDOT;
 import net.automatalib.visualization.Visualization;
 import net.automatalib.words.Alphabet;
+import net.automatalib.words.Word;
 import net.automatalib.words.impl.Alphabets;
 
 enum PolicyType {
@@ -49,6 +66,17 @@ enum PolicyType {
 	HW,
 	SKYL3,
 	SKYL2,
+}
+
+enum LearnAlgorithmType {
+	PAS,
+	LSTAR,
+	TTT,
+	KV,
+	MP,
+	DT,
+	DHC,
+	RS,
 }
 
 class Config {
@@ -69,6 +97,7 @@ class Config {
 	public Float hit_ratio, miss_ratio;
 	public String prefix;
 	public int max_size;
+	public LearnAlgorithmType learner;
 	public int votes;
 	public int limit;
 	public double revision_ratio;
@@ -135,6 +164,35 @@ class Config {
 				throw new Exception("unsupported policy");
 		}
 
+		switch (cmd.getOptionValue("learner", "pas").toLowerCase()) {
+			case "pas":
+				this.learner = LearnAlgorithmType.PAS;
+				break;
+			case "ttt":
+				this.learner = LearnAlgorithmType.TTT;
+				break;
+			case "kv":
+				this.learner = LearnAlgorithmType.KV;
+				break;
+			case "dhc":
+				this.learner = LearnAlgorithmType.DHC;
+				break;
+			case "mp":
+				this.learner = LearnAlgorithmType.MP;
+				break;
+			case "rs":
+				this.learner = LearnAlgorithmType.RS;
+				break;
+			case "dt":
+				this.learner = LearnAlgorithmType.DT;
+				break;
+			case "lstar":
+				this.learner = LearnAlgorithmType.LSTAR;
+				break;
+			default:
+				throw new Exception("unsupported learning algorithm");
+		}
+
 		if (this.policy == PolicyType.HW && !cmd.hasOption("binary")) {
 			throw new Exception("no path to proxy for 'hw' policy");
 		}
@@ -180,6 +238,7 @@ public final class Polca {
 		options.addOption(new Option("revision_ratio", true, "NEW"));
 		options.addOption(new Option("length_factor", true, "NEW"));
 		// learning settings
+		options.addOption(new Option("l", "learner", true, "learning algorithm pas|lstar|kv|mp|rs|dhc|dt|ttt (default: 'pas')"));
 		options.addOption(new Option("m", "max_size", true, "maximum number of states of SUL"));
 		options.addOption(new Option("r_min", true, "minimal length of random word (default: 10)"));
 		options.addOption(new Option("r_len", true, "expected length of random word (r_min + r_len) (default: 30)"));
@@ -243,20 +302,23 @@ public final class Polca {
 		Alphabet<String> alphabet = abstractInputAlphabet1;
 
 		CacheSUL cacheSul = new CacheSUL(this.config, alphabet);
-		MealyMembershipOracle<String, String> cacheSulOracle = new CacheSULOracle(cacheSul, this.config, "mq", this.config.noise);
-
+		CacheSULOracle cacheSulOracle = new CacheSULOracle(cacheSul, this.config, "mq", this.config.noise);
 		MealyCounterOracle<String, String> queryOracle = new MealyCounterOracle<>(cacheSulOracle, "Number of total queries");
-	
-		Random random = new Random();
-		random.setSeed(System.nanoTime());
 		
-		// Learner from membership oracle
-		PAS learn = new PAS(sulOracle -> new KearnsVaziraniMealy<String, String>(alphabet, sulOracle, true,
-         	AcexAnalyzers.BINARY_SEARCH_BWD), queryOracle, alphabet, this.config.limit * 2, this.config.revision_ratio, this.config.length_factor, random);
-		
-		List<Pair<Integer, CompactMealy<String, String>>> result = learn.run();
+		MealyMachine<?, String, ?, String> hyp;
 
-		CompactMealy<String, String> hyp = result.get(result.size()-1).getSecond();
+		if (this.config.learner == LearnAlgorithmType.PAS)	{
+			Random random = new Random();
+			random.setSeed(System.nanoTime());
+
+			PAS learn = new PAS(sulOracle -> new KearnsVaziraniMealy<String, String>(alphabet, sulOracle, true,
+         		AcexAnalyzers.BINARY_SEARCH_BWD), queryOracle, alphabet, this.config.limit * 2, this.config.revision_ratio, this.config.length_factor, random);
+			
+			List<Pair<Integer, CompactMealy<String, String>>> result = learn.run();
+			hyp = result.get(result.size()-1).getSecond();
+		}
+		else 
+			hyp = activeLearning(cacheSul, queryOracle, alphabet, this.config.noise);
 
 		if (this.config.temp_model) {
 			try {
@@ -298,5 +360,116 @@ public final class Polca {
 
     }
 
+
+
+	private MealyMachine<?, String, ?, String> activeLearning(CacheSUL cacheSul, MealyCounterOracle queryOracle, Alphabet<String> alphabet, float probability) throws Exception {
+		// instantiate test driver
+		CacheSUL eqSul = new CacheSUL(this.config, alphabet);
+        System.out.println("-------------------------------------------------------");
+
+		// Membership Queries
+		MealyCounterOracle<String, String> statsMemOracle = new MealyCounterOracle<String, String>(queryOracle, "membership queries");
+		MealyCacheOracle<String, String> cachedMemOracle = MealyCaches.createDAGCache(alphabet, statsMemOracle);
+		MealyCounterOracle<String, String> statsCachedMemOracle = new MealyCounterOracle<String, String>(cachedMemOracle, "membership queries hit cache");
+		MembershipOracle.MealyMembershipOracle<String, String> effMemOracle = this.config.no_cache ? statsMemOracle : statsCachedMemOracle;
+
+		// Equivalence Queries
+		CacheSULOracle sulEqOracle = new CacheSULOracle(eqSul, this.config, "eq", probability);
+		MealyCounterOracle<String, String> statsEqOracle = new MealyCounterOracle<String, String>(sulEqOracle, "equivalence queries");
+		MealyCacheOracle<String, String> cachedEqOracle = MealyCaches.createDAGCache(alphabet, statsEqOracle);
+		MealyCounterOracle<String, String> statsCachedEqOracle = new MealyCounterOracle<String, String>(cachedEqOracle, "equivalence queries hit cache");
+		MealyEquivalenceOracle<String, String> consistencyEqOracle = cachedMemOracle.createCacheConsistencyTest();
+
+		
+		LearningAlgorithm.MealyLearner<String,String> learn;
+		switch (this.config.learner) {
+			case TTT:
+				learn = new TTTLearnerMealyBuilder<String, String>().withAlphabet(alphabet).withOracle(effMemOracle).withAnalyzer(AcexAnalyzers.LINEAR_FWD).create();
+				break;
+			case DHC:
+				learn = new MealyDHC<String, String>(alphabet, effMemOracle);
+				break;
+			case KV:
+				learn = new KearnsVaziraniMealy<String, String>(alphabet, effMemOracle, true, AcexAnalyzers.LINEAR_FWD);
+				break;
+			case MP:
+				learn = new MalerPnueliMealy<String, String>(alphabet, effMemOracle);
+				break;
+			case RS:
+				learn = new RivestSchapireMealy<String, String>(alphabet, effMemOracle);
+				break;
+			case DT:
+				learn = new DTLearnerMealy<String, String>(alphabet, effMemOracle, LocalSuffixFinders.RIVEST_SCHAPIRE, true);
+				break;
+			case LSTAR:
+			default:
+				learn = new ExtensibleLStarMealyBuilder<String,String>().withAlphabet(alphabet).withOracle(effMemOracle).create();
+			break;
+		
+		}
+		
+		boolean random_ce = true;
+		MealyMachine<?, String, ?, String> hyp = null;
+		DefaultQuery<String, Word<String>> ce = null;
+
+		// Main learning loop
+		SimpleProfiler.start("learn");
+		do {
+			if (ce == null) {
+				learn.startLearning();
+			} else {
+				boolean refined = learn.refineHypothesis(ce);
+				if (!refined) {
+					System.err.println("No refinement effected by counterexample!");
+				}
+			}
+
+			hyp = learn.getHypothesisModel();
+			if (!this.config.silent) System.out.println("--> Hypothesis: " + hyp.getStates() + " - " + hyp.size());
+			// update depth with patch from: https://github.com/LearnLib/automatalib/issues/32
+
+			// if reach max size, we can skip comformance testing (learning is sound refinement)
+			if (hyp.size() >= this.config.max_size) {
+				break;
+			}
+
+			if (this.config.temp_model) {
+				try {
+					PrintStream fileOut = new PrintStream(".model.tmp");
+					GraphDOT.write(hyp, alphabet, fileOut); // may throw IOException!
+					fileOut.close();
+				} catch (IOException e) {}
+			}
+
+			if (this.config.is_random) {
+				if (this.config.no_cache) {
+					MealyEquivalenceOracle<String, String> randomWpMethod = new MealyRandomWpMethodEQOracle<>(statsEqOracle, this.config.r_min, this.config.r_len, this.config.r_bound);
+					ce = randomWpMethod.findCounterExample(hyp, alphabet);
+				} else {
+					MealyEquivalenceOracle<String, String> randomWpMethod = new MealyRandomWpMethodEQOracle<>(statsCachedEqOracle, this.config.r_min, this.config.r_len, this.config.r_bound);
+					MealyEQOracleChain<String, String> eqOracle = new MealyEQOracleChain<>(consistencyEqOracle, randomWpMethod);
+					ce = eqOracle.findCounterExample(hyp, alphabet);
+				}
+				random_ce = (ce != null);
+			}
+
+			if (!this.config.is_random || !random_ce) {
+				if (this.config.no_cache) {
+					MealyEquivalenceOracle<String, String> wpMethod = new MealyWpMethodEQOracle<>(statsEqOracle, this.config.max_depth);
+					ce = wpMethod.findCounterExample(hyp, alphabet);
+				} else {
+					MealyEquivalenceOracle<String, String> wpMethod = new MealyWpMethodEQOracle<>(statsCachedEqOracle, this.config.max_depth);
+					MealyEQOracleChain<String, String> eqOracle = new MealyEQOracleChain<>(consistencyEqOracle, wpMethod);
+					ce = eqOracle.findCounterExample(hyp, alphabet);
+				}
+				random_ce = true;
+			}
+
+			if (!this.config.silent) System.out.println("ce : " + ce);
+
+		} while (ce != null);
+
+		return hyp;
+	}
 }
 
