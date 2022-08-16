@@ -118,12 +118,12 @@ class Config {
 		this.prefix = cmd.getOptionValue("prefix", "@");
 		this.is_hw = false;
 		this.noise = Float.parseFloat(cmd.getOptionValue("n", "0"));
-		if (!cmd.hasOption("limit") || !cmd.hasOption("revision_ratio") || !cmd.hasOption("length_factor")) {
-			throw new Exception("missing new flags");
+		if (!cmd.hasOption("limit")) {
+			throw new Exception("missing limit flag");
 		}
 		this.limit = Integer.parseInt(cmd.getOptionValue("limit"));
-		this.revision_ratio = Double.parseDouble(cmd.getOptionValue("revision_ratio"));
-		this.length_factor = Double.parseDouble(cmd.getOptionValue("length_factor"));
+		this.revision_ratio = Double.parseDouble(cmd.getOptionValue("revision_ratio", "0.99"));
+		this.length_factor = Double.parseDouble(cmd.getOptionValue("length_factor", "0.99"));
 
 		switch (cmd.getOptionValue("policy", "fifo").toLowerCase()) {
 			case "hw":
