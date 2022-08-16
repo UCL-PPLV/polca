@@ -25,7 +25,6 @@ import org.apache.commons.cli.*;
 import java.io.PrintStream;
 
 import de.learnlib.algorithms.kv.mealy.KearnsVaziraniMealy;
-import de.learnlib.api.SUL;
 import de.learnlib.api.oracle.MembershipOracle.MealyMembershipOracle;
 import de.learnlib.acex.analyzers.AcexAnalyzers;
 import de.learnlib.algorithms.continuous.base.PAS;
@@ -74,7 +73,7 @@ class Config {
 	public int limit;
 	public double revision_ratio;
 	public double length_factor;
-	public boolean noise;
+	public float noise;
 
 	public Config (CommandLine cmd) throws Exception {
 		this.max_depth = Integer.parseInt(cmd.getOptionValue("depth", "1"));
@@ -89,7 +88,7 @@ class Config {
 		this.votes = Integer.parseInt(cmd.getOptionValue("votes", "1"));
 		this.prefix = cmd.getOptionValue("prefix", "@");
 		this.is_hw = false;
-		this.noise = cmd.hasOption("n");
+		this.noise = Float.parseFloat(cmd.getOptionValue("n", "0"));
 		if (!cmd.hasOption("limit") || !cmd.hasOption("revision_ratio") || !cmd.hasOption("length_factor")) {
 			throw new Exception("missing new flags");
 		}
@@ -168,6 +167,7 @@ public final class Polca {
 		options.addOption(new Option("w", "ways", true, "cache associativity (default: 4)"));
 		options.addOption(new Option("p", "policy", true, "simulator cache policy: fifo|lru|plru|lip|plip|mru|srriphp|srripfp|new1|new2|hw (default: 'fifo')"));
 		options.addOption(new Option("b", "binary", true, "path to proxy for 'hw' policy"));
+		options.addOption(new Option("n", "noise", true, "probability of noise"));
 		// general
 		options.addOption(new Option("o", "output", true, "write learnt .dot model into output file"));
 		// other
@@ -192,7 +192,6 @@ public final class Polca {
 		options.addOption(new Option("no_cache", false, "don't use cache for membership queries"));
 		options.addOption(new Option("h", "help", false, "show this help message"));
 		options.addOption(new Option("s", "silent", false, "remove stdout info"));
-		options.addOption(new Option("n", "noise", false, "add noise in the oracle"));
 
         CommandLineParser parser = new DefaultParser();
         HelpFormatter formatter = new HelpFormatter();
@@ -243,11 +242,8 @@ public final class Polca {
 		Alphabet<String> abstractInputAlphabet1 = Alphabets.fromArray(alphabet1);
 		Alphabet<String> alphabet = abstractInputAlphabet1;
 
-		SUL<String, String> memSul;
-		MealyMembershipOracle<String, String> cacheSulOracle;
-
-		memSul = this.config.noise ? new NoiseCacheSUL(this.config, alphabet) : new CacheSUL(this.config, alphabet);
-		cacheSulOracle = this.config.noise ? new NoiseCacheSULOracle(memSul, this.config, "mq") : new CacheSULOracle(memSul, this.config, "mq");
+		CacheSUL cacheSul = new CacheSUL(this.config, alphabet);
+		MealyMembershipOracle<String, String> cacheSulOracle = new CacheSULOracle(cacheSul, this.config, "mq", this.config.noise);
 
 		MealyCounterOracle<String, String> queryOracle = new MealyCounterOracle<>(cacheSulOracle, "Number of total queries");
 	
