@@ -19,6 +19,7 @@ import java.io.IOException;
 import java.util.List;
 import java.util.Random;
 import java.util.Arrays;
+import java.util.HashMap;
 
 import org.apache.commons.cli.*;
 
@@ -79,6 +80,11 @@ enum LearnAlgorithmType {
 	RS,
 }
 
+enum NoiseType {
+	PRE,
+	POST,
+}
+
 class Config {
 
 	public int max_depth;
@@ -99,17 +105,17 @@ class Config {
 	public int max_size;
 	public LearnAlgorithmType learner;
 	public int votes;
-	public int limit;
 	public double revision_ratio;
 	public double length_factor;
-	public float noise;
+	public NoiseType noise;
+	public float probability;
 
 	public Config (CommandLine cmd) throws Exception {
 		this.max_depth = Integer.parseInt(cmd.getOptionValue("depth", "1"));
 		this.ways = Integer.parseInt(cmd.getOptionValue("ways", "4"));
 		this.r_min = Integer.parseInt(cmd.getOptionValue("r_min", "10"));
 		this.r_len = Integer.parseInt(cmd.getOptionValue("r_len", "30"));
-		this.r_bound = Integer.parseInt(cmd.getOptionValue("r_len", "1000"));
+		this.r_bound = Integer.parseInt(cmd.getOptionValue("r_bound", "1000"));
 		this.repetitions = Integer.parseInt(cmd.getOptionValue("repetitions", "100"));
 		this.max_size = Integer.parseInt(cmd.getOptionValue("max_size", "2147483647"));
 		this.hit_ratio = Float.parseFloat(cmd.getOptionValue("hit_ratio", "0.8"));
@@ -117,11 +123,19 @@ class Config {
 		this.votes = Integer.parseInt(cmd.getOptionValue("votes", "1"));
 		this.prefix = cmd.getOptionValue("prefix", "@");
 		this.is_hw = false;
-		this.noise = Float.parseFloat(cmd.getOptionValue("n", "0"));
-		if (!cmd.hasOption("limit")) {
-			throw new Exception("missing limit flag");
-		}
-		this.limit = Integer.parseInt(cmd.getOptionValue("limit"));
+
+		String noise = cmd.getOptionValue("n");
+		if (noise == null)
+			this.noise = null;
+		else if (noise.toLowerCase().equals("pre"))
+			this.noise = NoiseType.PRE;
+		else if (noise.toLowerCase().equals("post"))
+			this.noise = NoiseType.POST;
+		else
+			throw new Exception("unsupported noise type");
+		
+		this.probability = Float.parseFloat(cmd.getOptionValue("prob", "0"));
+
 		this.revision_ratio = Double.parseDouble(cmd.getOptionValue("revision_ratio", "0.99"));
 		this.length_factor = Double.parseDouble(cmd.getOptionValue("length_factor", "0.99"));
 
@@ -209,6 +223,7 @@ class Config {
 
 public final class Polca {
 
+	private static final String Set = null;
 	private Config config;
 
     public Polca (CommandLine cmd) throws Exception {
@@ -225,7 +240,9 @@ public final class Polca {
 		options.addOption(new Option("w", "ways", true, "cache associativity (default: 4)"));
 		options.addOption(new Option("p", "policy", true, "simulator cache policy: fifo|lru|plru|lip|plip|mru|srriphp|srripfp|new1|new2|hw (default: 'fifo')"));
 		options.addOption(new Option("b", "binary", true, "path to proxy for 'hw' policy"));
-		options.addOption(new Option("n", "noise", true, "probability of noise"));
+		//noise
+		options.addOption(new Option("n", "noise", true, "type of noise pre|post"));
+		options.addOption(new Option("prob", "noise probability", true, "probability of noise"));
 		// general
 		options.addOption(new Option("o", "output", true, "write learnt .dot model into output file"));
 		// other
@@ -234,7 +251,6 @@ public final class Polca {
 		options.addOption(new Option("votes", true, "number of votes for deciding result (default: 1)"));
 		options.addOption(new Option("hit_ratio", true, "ratio of hits to consider a HIT (default: 0.8)"));
 		options.addOption(new Option("miss_ratio", true, "ratio of misses to consider a MISS (default: 0.2)"));
-		options.addOption(new Option("limit", true, "NEW"));
 		options.addOption(new Option("revision_ratio", true, "NEW"));
 		options.addOption(new Option("length_factor", true, "NEW"));
 		// learning settings
@@ -302,7 +318,7 @@ public final class Polca {
 		Alphabet<String> alphabet = abstractInputAlphabet1;
 
 		CacheSUL cacheSul = new CacheSUL(this.config, alphabet);
-		CacheSULOracle cacheSulOracle = new CacheSULOracle(cacheSul, this.config, "mq", this.config.noise);
+		CacheSULOracle cacheSulOracle = new CacheSULOracle(cacheSul, this.config, "mq", this.config.noise, this.config.probability);
 		MealyCounterOracle<String, String> queryOracle = new MealyCounterOracle<>(cacheSulOracle, "Number of total queries");
 		
 		MealyMachine<?, String, ?, String> hyp;
@@ -312,13 +328,14 @@ public final class Polca {
 			random.setSeed(System.nanoTime());
 
 			PAS learn = new PAS(sulOracle -> new KearnsVaziraniMealy<String, String>(alphabet, sulOracle, true,
-         		AcexAnalyzers.BINARY_SEARCH_BWD), queryOracle, alphabet, this.config.limit * 2, this.config.revision_ratio, this.config.length_factor, random);
-			
-			List<Pair<Integer, CompactMealy<String, String>>> result = learn.run();
-			hyp = result.get(result.size()-1).getSecond();
+         		AcexAnalyzers.BINARY_SEARCH_BWD), queryOracle, alphabet, this.config.r_bound * 2, this.config.revision_ratio, this.config.length_factor, random);
+
+			List<Pair<Integer, CompactMealy<String, String>>> res = learn.run();
+			hyp = majorityVote(res);
+			hyp = res.get(res.size()-1).getSecond();
 		}
 		else 
-			hyp = activeLearning(cacheSul, queryOracle, alphabet, this.config.noise);
+			hyp = activeLearning(cacheSul, queryOracle, alphabet, this.config.noise, this.config.probability);
 
 		if (this.config.temp_model) {
 			try {
@@ -362,7 +379,20 @@ public final class Polca {
 
 
 
-	private MealyMachine<?, String, ?, String> activeLearning(CacheSUL cacheSul, MealyCounterOracle queryOracle, Alphabet<String> alphabet, float probability) throws Exception {
+	private MealyMachine<?, String, ?, String> majorityVote(List<Pair<Integer, CompactMealy<String, String>>> hypList) {
+		HashMap<CompactMealy<String, String>, Integer> map = new HashMap<>();
+		System.out.println(hypList);
+		for (Pair<Integer, CompactMealy<String, String>> pair : hypList) {
+			CompactMealy<String, String> mealy = pair.getSecond();
+			if (map.containsKey(mealy)) 
+				map.put(mealy, map.get(mealy)+1);
+			else
+				map.put(mealy, 1);
+		}
+		return null;
+	}
+
+	private MealyMachine<?, String, ?, String> activeLearning(CacheSUL cacheSul, MealyCounterOracle queryOracle, Alphabet<String> alphabet, NoiseType noise, float probability) throws Exception {
 		// instantiate test driver
 		CacheSUL eqSul = new CacheSUL(this.config, alphabet);
         System.out.println("-------------------------------------------------------");
@@ -374,7 +404,7 @@ public final class Polca {
 		MembershipOracle.MealyMembershipOracle<String, String> effMemOracle = this.config.no_cache ? statsMemOracle : statsCachedMemOracle;
 
 		// Equivalence Queries
-		CacheSULOracle sulEqOracle = new CacheSULOracle(eqSul, this.config, "eq", probability);
+		CacheSULOracle sulEqOracle = new CacheSULOracle(eqSul, this.config, "eq", noise, probability);
 		MealyCounterOracle<String, String> statsEqOracle = new MealyCounterOracle<String, String>(sulEqOracle, "equivalence queries");
 		MealyCacheOracle<String, String> cachedEqOracle = MealyCaches.createDAGCache(alphabet, statsEqOracle);
 		MealyCounterOracle<String, String> statsCachedEqOracle = new MealyCounterOracle<String, String>(cachedEqOracle, "equivalence queries hit cache");
