@@ -19,37 +19,38 @@ public class CacheSULOracle implements MealyMembershipOracle<String, String> {
     private NoiseType noise;
     private float probability;
 	private Config config;
+    private Random random;
 
-    public CacheSULOracle(CacheSUL sul, Config conf, String label, NoiseType noise, float probability) {
+    public CacheSULOracle(CacheSUL sul, Config conf, String label, NoiseType noise, float probability, Random random) {
         this.sul = sul;
 		this.config = conf;
 		this.label = label;
 		this.noise = noise;
 		this.probability = probability;
+        this.random = random;
     }
 
     @Override
     public void processQueries(Collection<? extends Query<String, Word<String>>> queries) {
 		synchronized (sul) {
-                processQueries(sul, queries, this.config, label, noise, probability);
+                processQueries(sul, queries, this.config, label, noise, probability, random);
         }
     }
 
-    private static void processQueries(CacheSUL sul, Collection<? extends Query<String, Word<String>>> queries, Config config, String label, NoiseType noise, float probability) {
+    private static void processQueries(CacheSUL sul, Collection<? extends Query<String, Word<String>>> queries, Config config, String label, NoiseType noise, float probability, Random random) {
         for (Query<String, Word<String>> q : queries) {
 			if (config.verbose) System.out.println("(" + label + ") " + "processQuery: " + q);
-			Word<String> output = answerQuery(sul, q.getPrefix(), q.getSuffix(), config.ways, noise, probability);
+			Word<String> output = answerQuery(sul, q.getPrefix(), q.getSuffix(), config.ways, noise, probability, random);
             q.answer(output);
         }
     }
 
     @NonNull
-    public static Word<String> answerQuery(CacheSUL sul, Word<String> prefix, Word<String> suffix, int ways, NoiseType noise, float probability) {
+    public static Word<String> answerQuery(CacheSUL sul, Word<String> prefix, Word<String> suffix, int ways, NoiseType noise, float probability, Random random) {
         sul.pre();
         try {
             //Pre noise introduced
             if (noise == NoiseType.PRE){
-                Random random = new Random();
                 if (random.nextFloat() < probability) { // Probability
                     int noiseIndex = random.nextInt(prefix.length() + 1);
                     
@@ -76,7 +77,6 @@ public class CacheSULOracle implements MealyMembershipOracle<String, String> {
 
             //Post noise introduced
             if (noise == NoiseType.POST){
-                Random random = new Random();
                 if (random.nextFloat() < probability) { // Probability
                     ArrayList<Integer> indexes = new ArrayList<>();
 

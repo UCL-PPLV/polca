@@ -317,15 +317,15 @@ public final class Polca {
 		Alphabet<String> abstractInputAlphabet1 = Alphabets.fromArray(alphabet1);
 		Alphabet<String> alphabet = abstractInputAlphabet1;
 
+		Random random = new Random();
+		random.setSeed(2);
 		CacheSUL cacheSul = new CacheSUL(this.config, alphabet);
-		CacheSULOracle cacheSulOracle = new CacheSULOracle(cacheSul, this.config, "mq", this.config.noise, this.config.probability);
+		CacheSULOracle cacheSulOracle = new CacheSULOracle(cacheSul, this.config, "mq", this.config.noise, this.config.probability, random);
 		MealyCounterOracle<String, String> queryOracle = new MealyCounterOracle<>(cacheSulOracle, "Number of total queries");
 		
 		MealyMachine<?, String, ?, String> hyp;
 
 		if (this.config.learner == LearnAlgorithmType.PAS)	{
-			Random random = new Random();
-			random.setSeed(System.nanoTime());
 
 			PAS learn = new PAS(sulOracle -> new KearnsVaziraniMealy<String, String>(alphabet, sulOracle, true,
          		AcexAnalyzers.BINARY_SEARCH_BWD), queryOracle, alphabet, this.config.r_bound * 2, this.config.revision_ratio, this.config.length_factor, random);
@@ -335,7 +335,7 @@ public final class Polca {
 			hyp = res.get(res.size()-1).getSecond();
 		}
 		else 
-			hyp = activeLearning(cacheSul, queryOracle, alphabet, this.config.noise, this.config.probability);
+			hyp = activeLearning(cacheSul, queryOracle, alphabet, this.config.noise, this.config.probability, random);
 
 		if (this.config.temp_model) {
 			try {
@@ -392,7 +392,7 @@ public final class Polca {
 		return null;
 	}
 
-	private MealyMachine<?, String, ?, String> activeLearning(CacheSUL cacheSul, MealyCounterOracle queryOracle, Alphabet<String> alphabet, NoiseType noise, float probability) throws Exception {
+	private MealyMachine<?, String, ?, String> activeLearning(CacheSUL cacheSul, MealyCounterOracle queryOracle, Alphabet<String> alphabet, NoiseType noise, float probability, Random random) throws Exception {
 		// instantiate test driver
 		CacheSUL eqSul = new CacheSUL(this.config, alphabet);
         System.out.println("-------------------------------------------------------");
@@ -404,7 +404,7 @@ public final class Polca {
 		MembershipOracle.MealyMembershipOracle<String, String> effMemOracle = this.config.no_cache ? statsMemOracle : statsCachedMemOracle;
 
 		// Equivalence Queries
-		CacheSULOracle sulEqOracle = new CacheSULOracle(eqSul, this.config, "eq", noise, probability);
+		CacheSULOracle sulEqOracle = new CacheSULOracle(eqSul, this.config, "eq", noise, probability, random);
 		MealyCounterOracle<String, String> statsEqOracle = new MealyCounterOracle<String, String>(sulEqOracle, "equivalence queries");
 		MealyCacheOracle<String, String> cachedEqOracle = MealyCaches.createDAGCache(alphabet, statsEqOracle);
 		MealyCounterOracle<String, String> statsCachedEqOracle = new MealyCounterOracle<String, String>(cachedEqOracle, "equivalence queries hit cache");
