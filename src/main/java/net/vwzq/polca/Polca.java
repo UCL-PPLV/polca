@@ -18,7 +18,9 @@ package net.vwzq.polca;
 import java.io.IOException;
 import java.util.List;
 import java.util.Random;
+import java.util.function.Function;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 
 import org.apache.commons.cli.*;
@@ -26,6 +28,9 @@ import org.apache.commons.cli.*;
 import java.io.PrintStream;
 
 import de.learnlib.algorithms.kv.mealy.KearnsVaziraniMealy;
+import de.learnlib.algorithms.lstar.ce.ObservationTableCEXHandlers;
+import de.learnlib.algorithms.lstar.closing.ClosingStrategies;
+import de.learnlib.algorithms.lstar.mealy.ExtensibleLStarMealy;
 import de.learnlib.algorithms.lstar.mealy.ExtensibleLStarMealyBuilder;
 import de.learnlib.algorithms.malerpnueli.MalerPnueliMealy;
 import de.learnlib.algorithms.rivestschapire.RivestSchapireMealy;
@@ -36,7 +41,7 @@ import de.learnlib.api.oracle.EquivalenceOracle.MealyEquivalenceOracle;
 import de.learnlib.api.query.DefaultQuery;
 import de.learnlib.counterexamples.LocalSuffixFinders;
 import de.learnlib.acex.analyzers.AcexAnalyzers;
-import de.learnlib.algorithms.continuous.base.PAS;
+import de.learnlib.algorithms.continuous.base.PAR;
 import de.learnlib.algorithms.dhc.mealy.MealyDHC;
 import de.learnlib.algorithms.discriminationtree.mealy.DTLearnerMealy;
 import de.learnlib.filter.cache.mealy.MealyCacheOracle;
@@ -45,6 +50,7 @@ import de.learnlib.filter.statistic.oracle.MealyCounterOracle;
 import de.learnlib.oracle.equivalence.MealyEQOracleChain;
 import de.learnlib.oracle.equivalence.MealyRandomWpMethodEQOracle;
 import de.learnlib.oracle.equivalence.MealyWpMethodEQOracle;
+import de.learnlib.oracle.membership.ProbabilisticOracle;
 import de.learnlib.util.statistics.SimpleProfiler;
 import net.automatalib.automata.transducers.MealyMachine;
 import net.automatalib.automata.transducers.impl.compact.CompactMealy;
@@ -115,7 +121,7 @@ class Config {
 		this.ways = Integer.parseInt(cmd.getOptionValue("ways", "4"));
 		this.r_min = Integer.parseInt(cmd.getOptionValue("r_min", "10"));
 		this.r_len = Integer.parseInt(cmd.getOptionValue("r_len", "30"));
-		this.r_bound = Integer.parseInt(cmd.getOptionValue("r_bound", "1000"));
+		this.r_bound = Integer.parseInt(cmd.getOptionValue("r_bound", "200"));
 		this.repetitions = Integer.parseInt(cmd.getOptionValue("repetitions", "100"));
 		this.max_size = Integer.parseInt(cmd.getOptionValue("max_size", "2147483647"));
 		this.hit_ratio = Float.parseFloat(cmd.getOptionValue("hit_ratio", "0.8"));
@@ -225,6 +231,7 @@ public final class Polca {
 
 	private static final String Set = null;
 	private Config config;
+	private long count;
 
     public Polca (CommandLine cmd) throws Exception {
 		this.config = new Config(cmd);
@@ -321,17 +328,21 @@ public final class Polca {
 		random.setSeed(2);
 		CacheSUL cacheSul = new CacheSUL(this.config, alphabet);
 		CacheSULOracle cacheSulOracle = new CacheSULOracle(cacheSul, this.config, "mq", this.config.noise, this.config.probability, random);
-		MealyCounterOracle<String, String> queryOracle = new MealyCounterOracle<>(cacheSulOracle, "Number of total queries");
+        MealyCounterOracle<String, String> counterOracle = new MealyCounterOracle<>(cacheSulOracle, "Membership Queries");
+        ProbabilisticOracle<String, String> queryOracle = new ProbabilisticOracle<>(counterOracle, 3, 0.7, 10);
 		
 		MealyMachine<?, String, ?, String> hyp;
 
 		if (this.config.learner == LearnAlgorithmType.PAS)	{
+			Function<MembershipOracle.MealyMembershipOracle<String, String>, LearningAlgorithm.MealyLearner<String, String>> constructor;
+			constructor = (sulOracle -> new ExtensibleLStarMealy<>(alphabet, sulOracle, Collections.emptyList(),
+                    ObservationTableCEXHandlers.CLASSIC_LSTAR, ClosingStrategies.CLOSE_SHORTEST));
 
-			PAS learn = new PAS(sulOracle -> new KearnsVaziraniMealy<String, String>(alphabet, sulOracle, true,
-         		AcexAnalyzers.BINARY_SEARCH_BWD), queryOracle, alphabet, this.config.r_bound * 2, this.config.revision_ratio, this.config.length_factor, random);
+			PAR learn = new PAR(constructor, queryOracle, alphabet, this.config.r_bound * 2, this.config.revision_ratio, this.config.length_factor, false, random, counterOracle.getCounter());
 
-			List<Pair<Integer, CompactMealy<String, String>>> res = learn.run();
-			hyp = majorityVote(res);
+			List<Pair<Integer, MealyMachine<?, String, ?, String>>> res = learn.run();
+			count = learn.counter.getCount();
+			//hyp = majorityVote(res);
 			hyp = res.get(res.size()-1).getSecond();
 		}
 		else 
@@ -353,7 +364,7 @@ public final class Polca {
         System.out.println("-------------------------------------------------------");
 //		System.out.println("Total HW queries: " + totalHwQueries);
 		System.out.println("Summary Statistics: ");
-		System.out.println("\t" + queryOracle.getStatisticalData().getSummary());
+		System.out.println("\t" + count);
 
 		if (hyp != null) {
 			// model statistics
@@ -379,11 +390,11 @@ public final class Polca {
 
 
 
-	private MealyMachine<?, String, ?, String> majorityVote(List<Pair<Integer, CompactMealy<String, String>>> hypList) {
-		HashMap<CompactMealy<String, String>, Integer> map = new HashMap<>();
-		System.out.println(hypList);
-		for (Pair<Integer, CompactMealy<String, String>> pair : hypList) {
-			CompactMealy<String, String> mealy = pair.getSecond();
+	private MealyMachine<?, String, ?, String> majorityVote(List<Pair<Integer, MealyMachine<?, String, ?, String>>> res) {
+		HashMap<MealyMachine<?, String, ?, String>, Integer> map = new HashMap<>();
+		System.out.println(res);
+		for (Pair<Integer, MealyMachine<?, String, ?, String>> pair : res) {
+			MealyMachine<?, String, ?, String> mealy = pair.getSecond();
 			if (map.containsKey(mealy)) 
 				map.put(mealy, map.get(mealy)+1);
 			else
@@ -392,7 +403,7 @@ public final class Polca {
 		return null;
 	}
 
-	private MealyMachine<?, String, ?, String> activeLearning(CacheSUL cacheSul, MealyCounterOracle queryOracle, Alphabet<String> alphabet, NoiseType noise, float probability, Random random) throws Exception {
+	private MealyMachine<?, String, ?, String> activeLearning(CacheSUL cacheSul, ProbabilisticOracle<String, String> queryOracle, Alphabet<String> alphabet, NoiseType noise, float probability, Random random) throws Exception {
 		// instantiate test driver
 		CacheSUL eqSul = new CacheSUL(this.config, alphabet);
         System.out.println("-------------------------------------------------------");
