@@ -60,7 +60,6 @@ public class CacheSULOracle implements MealyMembershipOracle<String, String> {
                     ArrayList<String> prefixList = new ArrayList<String>(prefix.asList());
                     prefixList.add(noiseIndex, alphabet.getSymbol(noiseInputIndex));
                     prefix = Word.fromList(prefixList);
-                    System.out.println("prefix after noise: " + prefix);
                 }
             }
 
@@ -84,7 +83,7 @@ public class CacheSULOracle implements MealyMembershipOracle<String, String> {
                         if (!wb.get(i).equals("_"))
                             indexes.add(i);
                     }
-                    System.out.println(indexes);
+
                     if (!indexes.isEmpty()) {
                         // get value to change
                         int noiseIndex = indexes.get(random.nextInt(indexes.size()));
@@ -94,9 +93,7 @@ public class CacheSULOracle implements MealyMembershipOracle<String, String> {
                         int[] output = IntStream.concat(IntStream.range(0, initVal), IntStream.range(initVal+1, ways)).toArray();
                         int finalVal = output[random.nextInt(output.length)];
 
-                        System.out.println("output before noise: " + wb.toString());
                         wb.set(noiseIndex, String.valueOf(finalVal));
-                        System.out.println("output after noise: " + wb.toString());
                     }
                 }
             }
