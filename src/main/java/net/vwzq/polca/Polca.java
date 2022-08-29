@@ -22,6 +22,7 @@ import java.util.function.Function;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedList;
 
 import org.apache.commons.cli.*;
 
@@ -38,6 +39,7 @@ import de.learnlib.algorithms.ttt.mealy.TTTLearnerMealyBuilder;
 import de.learnlib.api.algorithm.LearningAlgorithm;
 import de.learnlib.api.oracle.MembershipOracle;
 import de.learnlib.api.oracle.EquivalenceOracle.MealyEquivalenceOracle;
+import de.learnlib.api.oracle.MembershipOracle.MealyMembershipOracle;
 import de.learnlib.api.query.DefaultQuery;
 import de.learnlib.counterexamples.LocalSuffixFinders;
 import de.learnlib.acex.analyzers.AcexAnalyzers;
@@ -48,14 +50,17 @@ import de.learnlib.filter.cache.mealy.MealyCacheOracle;
 import de.learnlib.filter.cache.mealy.MealyCaches;
 import de.learnlib.filter.statistic.oracle.MealyCounterOracle;
 import de.learnlib.oracle.equivalence.MealyEQOracleChain;
+import de.learnlib.oracle.equivalence.MealyRandomWordsEQOracle;
 import de.learnlib.oracle.equivalence.MealyRandomWpMethodEQOracle;
 import de.learnlib.oracle.equivalence.MealyWpMethodEQOracle;
+import de.learnlib.oracle.equivalence.RandomWordsEQOracle;
 import de.learnlib.oracle.membership.ProbabilisticOracle;
 import de.learnlib.util.statistics.SimpleProfiler;
 import net.automatalib.automata.transducers.MealyMachine;
 import net.automatalib.automata.transducers.impl.compact.CompactMealy;
 import net.automatalib.commons.util.Pair;
 import net.automatalib.serialization.dot.GraphDOT;
+import net.automatalib.util.automata.equivalence.DeterministicEquivalenceTest;
 import net.automatalib.visualization.Visualization;
 import net.automatalib.words.Alphabet;
 import net.automatalib.words.Word;
@@ -89,6 +94,7 @@ enum LearnAlgorithmType {
 enum NoiseType {
 	PRE,
 	POST,
+	CLEAN,
 }
 
 class Config {
@@ -237,23 +243,24 @@ public final class Polca {
 		this.config = new Config(cmd);
     }
 
-    public static void main(String[] args) throws Exception {
+	public static void main(String[] args) throws Exception {
 
 		// Options
-        Options options = new Options();
+		Options options = new Options();
 
 		// cache settings
 		options.addOption(new Option("d", "depth", true, "max_depth for membership queries (default: 1)"));
 		options.addOption(new Option("w", "ways", true, "cache associativity (default: 4)"));
-		options.addOption(new Option("p", "policy", true, "simulator cache policy: fifo|lru|plru|lip|plip|mru|srriphp|srripfp|new1|new2|hw (default: 'fifo')"));
+		options.addOption(new Option("p", "policy", true,
+				"simulator cache policy: fifo|lru|plru|lip|plip|mru|srriphp|srripfp|new1|new2|hw (default: 'fifo')"));
 		options.addOption(new Option("b", "binary", true, "path to proxy for 'hw' policy"));
 		//noise
-		options.addOption(new Option("n", "noise", true, "type of noise pre|post"));
+		options.addOption(new Option("n", "noise", true, "type of noise pre|post|clean"));
 		options.addOption(new Option("prob", "noise probability", true, "probability of noise"));
 		// general
 		options.addOption(new Option("o", "output", true, "write learnt .dot model into output file"));
 		// other
-		options.addOption(new Option("prefix",  true, "prefix before every query, used to fill cache (default: '@')"));
+		options.addOption(new Option("prefix", true, "prefix before every query, used to fill cache (default: '@')"));
 		options.addOption(new Option("r", "repetitions", true, "number of measurements by cachequery (default: 100)"));
 		options.addOption(new Option("votes", true, "number of votes for deciding result (default: 1)"));
 		options.addOption(new Option("hit_ratio", true, "ratio of hits to consider a HIT (default: 0.8)"));
@@ -261,11 +268,13 @@ public final class Polca {
 		options.addOption(new Option("revision_ratio", true, "NEW"));
 		options.addOption(new Option("length_factor", true, "NEW"));
 		// learning settings
-		options.addOption(new Option("l", "learner", true, "learning algorithm pas|lstar|kv|mp|rs|dhc|dt|ttt (default: 'pas')"));
+		options.addOption(
+				new Option("l", "learner", true, "learning algorithm pas|lstar|kv|mp|rs|dhc|dt|ttt (default: 'pas')"));
 		options.addOption(new Option("m", "max_size", true, "maximum number of states of SUL"));
 		options.addOption(new Option("r_min", true, "minimal length of random word (default: 10)"));
 		options.addOption(new Option("r_len", true, "expected length of random word (r_min + r_len) (default: 30)"));
-		options.addOption(new Option("r_bound", true, "bound on queries for equivalence, set to 0 for unbounded (default: 1000)"));
+		options.addOption(new Option("r_bound", true,
+				"bound on queries for equivalence, set to 0 for unbounded (default: 1000)"));
 		options.addOption(new Option("r_rand", true, "TODO: select custom random generator"));
 		// flags
 		options.addOption(new Option("random", false, "use random wp-method as equivalence query"));
@@ -275,21 +284,21 @@ public final class Polca {
 		options.addOption(new Option("h", "help", false, "show this help message"));
 		options.addOption(new Option("s", "silent", false, "remove stdout info"));
 
-        CommandLineParser parser = new DefaultParser();
-        HelpFormatter formatter = new HelpFormatter();
-        CommandLine cmd = null;
+		CommandLineParser parser = new DefaultParser();
+		HelpFormatter formatter = new HelpFormatter();
+		CommandLine cmd = null;
 
-        try {
-            cmd = parser.parse(options, args);
-        } catch (ParseException e) {
-            System.out.println(e.getMessage());
-            formatter.printHelp("Polca", options);
-            System.exit(1);
-        }
+		try {
+			cmd = parser.parse(options, args);
+		} catch (ParseException e) {
+			System.out.println(e.getMessage());
+			formatter.printHelp("Polca", options);
+			System.exit(1);
+		}
 
 		// show help menu
 		if (cmd.hasOption("help")) {
-            formatter.printHelp("Polca", options);
+			formatter.printHelp("Polca", options);
 			System.exit(1);
 		}
 
@@ -298,18 +307,38 @@ public final class Polca {
 		try {
 			learn = new Polca(cmd);
 		} catch (Exception e) {
-            System.out.println(e.getMessage());
-            formatter.printHelp("Polca", options);
-            System.exit(1);
+			System.out.println(e.getMessage());
+			formatter.printHelp("Polca", options);
+			System.exit(1);
 		}
 
 		// execute
-		try{
+		try {
 			learn.run();
 		} catch (Exception e) {
 			throw e;
 		}
 
+	}
+
+	public MealyMachine<?, String, ?, String> learnReference() throws Exception {
+		String[] alphabet1 = {
+				"h(0)", "h(1)", "h(2)", "h(3)", "h(4)", "h(5)", "h(6)", "h(7)", "h(8)",
+				"h(9)", "h(10)", "h(11)", "h(12)", "h(13)", "h(14)", "h(15)", "h(16)", "h(17)",
+				"h(18)", "h(19)", "h(20)", "h(21)", "h(22)", "h(23)", "h(24)", "h(25)", "h(26)",
+		};
+		alphabet1 = Arrays.copyOfRange(alphabet1, 0, this.config.ways + 1);
+		alphabet1[alphabet1.length - 1] = "m()";
+		Alphabet<String> abstractInputAlphabet1 = Alphabets.fromArray(alphabet1);
+		Alphabet<String> alphabet = abstractInputAlphabet1;
+
+		Random random = new Random();
+
+		CacheSUL cacheSul = new CacheSUL(this.config, alphabet);
+		CacheSULOracle cacheSulOracle = new CacheSULOracle(cacheSul, this.config, "mq", NoiseType.CLEAN,
+				this.config.probability, random);
+
+		return activeLearning(cacheSulOracle, alphabet, NoiseType.CLEAN, this.config.probability, random, 20000);
 	}
 
 	public void run() throws Exception {
@@ -325,28 +354,50 @@ public final class Polca {
 		Alphabet<String> alphabet = abstractInputAlphabet1;
 
 		Random random = new Random();
-		random.setSeed(2);
+		Long seed = random.nextLong();
+		random.setSeed(seed);
+
 		CacheSUL cacheSul = new CacheSUL(this.config, alphabet);
 		CacheSULOracle cacheSulOracle = new CacheSULOracle(cacheSul, this.config, "mq", this.config.noise, this.config.probability, random);
-        MealyCounterOracle<String, String> counterOracle = new MealyCounterOracle<>(cacheSulOracle, "Membership Queries");
-        ProbabilisticOracle<String, String> queryOracle = new ProbabilisticOracle<>(counterOracle, 3, 0.7, 10);
+		MealyCounterOracle<String, String> counterOracle = new MealyCounterOracle<>(cacheSulOracle,
+				"Membership Queries");
+		// great results with 5 0.7 20
+		// Number of repeats needed grows exponentially(?) with noise removal
+		// percentage.
+		ProbabilisticOracle<String, String> queryOracle = new ProbabilisticOracle<>(counterOracle, 10, 0.7, 20);
 		
 		MealyMachine<?, String, ?, String> hyp;
 
 		if (this.config.learner == LearnAlgorithmType.PAS)	{
 			Function<MembershipOracle.MealyMembershipOracle<String, String>, LearningAlgorithm.MealyLearner<String, String>> constructor;
 			constructor = (sulOracle -> new ExtensibleLStarMealy<>(alphabet, sulOracle, Collections.emptyList(),
-                    ObservationTableCEXHandlers.CLASSIC_LSTAR, ClosingStrategies.CLOSE_SHORTEST));
+					ObservationTableCEXHandlers.RIVEST_SCHAPIRE, ClosingStrategies.CLOSE_SHORTEST));
 
-			PAR learn = new PAR(constructor, queryOracle, alphabet, this.config.r_bound * 2, this.config.revision_ratio, this.config.length_factor, false, random, counterOracle.getCounter());
+			MealyMachine<?, String, ?, String> reference = learnReference();
 
+			PAR learn = new PAR(constructor, queryOracle, alphabet, this.config.r_bound * 2, this.config.revision_ratio,
+					this.config.length_factor, false, random, counterOracle.getCounter());
 			List<Pair<Integer, MealyMachine<?, String, ?, String>>> res = learn.run();
-			count = learn.counter.getCount();
-			//hyp = majorityVote(res);
+
+			res = toLifetime(res, this.config.r_bound * 2);
+
+			Integer correct = 0;
+			for (Pair<Integer, MealyMachine<?, String, ?, String>> pair : res) {
+				if (DeterministicEquivalenceTest.findSeparatingWord(reference, pair.getSecond(), alphabet) == null) {
+					correct += pair.getFirst();
+				}
+			}
+
+			System.out.println("# CORRECT RATIO: " + correct + " / " + this.config.r_bound * 2);
+			System.out.println("# SEED: " + seed);
+
 			hyp = res.get(res.size()-1).getSecond();
 		}
 		else 
-			hyp = activeLearning(cacheSul, queryOracle, alphabet, this.config.noise, this.config.probability, random);
+			hyp = activeLearning(queryOracle, alphabet, this.config.noise, this.config.probability, random,
+					this.config.r_bound);
+
+		count = counterOracle.getCount();
 
 		if (this.config.temp_model) {
 			try {
@@ -390,22 +441,26 @@ public final class Polca {
 
 
 
-	private MealyMachine<?, String, ?, String> majorityVote(List<Pair<Integer, MealyMachine<?, String, ?, String>>> res) {
-		HashMap<MealyMachine<?, String, ?, String>, Integer> map = new HashMap<>();
-		System.out.println(res);
-		for (Pair<Integer, MealyMachine<?, String, ?, String>> pair : res) {
-			MealyMachine<?, String, ?, String> mealy = pair.getSecond();
-			if (map.containsKey(mealy)) 
-				map.put(mealy, map.get(mealy)+1);
-			else
-				map.put(mealy, 1);
+	private List<Pair<Integer, MealyMachine<?, String, ?, String>>> toLifetime(
+			List<Pair<Integer, MealyMachine<?, String, ?, String>>> in, Integer limit) {
+		List<Pair<Integer, MealyMachine<?, String, ?, String>>> out = new LinkedList<>();
+		for (int i = 0; i < in.size(); i++) {
+			int nextLimit = limit;
+			if (i != in.size() - 1) {
+				nextLimit = in.get(i + 1).getFirst();
+			}
+
+			out.add(Pair.of(nextLimit - in.get(i).getFirst(), in.get(i).getSecond()));
 		}
-		return null;
+
+		return out;
+
 	}
 
-	private MealyMachine<?, String, ?, String> activeLearning(CacheSUL cacheSul, ProbabilisticOracle<String, String> queryOracle, Alphabet<String> alphabet, NoiseType noise, float probability, Random random) throws Exception {
+	private MealyMachine<?, String, ?, String> activeLearning(MealyMembershipOracle<String, String> queryOracle,
+			Alphabet<String> alphabet, NoiseType noise, float probability, Random random, Integer limit)
+			throws Exception {
 		// instantiate test driver
-		CacheSUL eqSul = new CacheSUL(this.config, alphabet);
         System.out.println("-------------------------------------------------------");
 
 		// Membership Queries
@@ -413,13 +468,6 @@ public final class Polca {
 		MealyCacheOracle<String, String> cachedMemOracle = MealyCaches.createDAGCache(alphabet, statsMemOracle);
 		MealyCounterOracle<String, String> statsCachedMemOracle = new MealyCounterOracle<String, String>(cachedMemOracle, "membership queries hit cache");
 		MembershipOracle.MealyMembershipOracle<String, String> effMemOracle = this.config.no_cache ? statsMemOracle : statsCachedMemOracle;
-
-		// Equivalence Queries
-		CacheSULOracle sulEqOracle = new CacheSULOracle(eqSul, this.config, "eq", noise, probability, random);
-		MealyCounterOracle<String, String> statsEqOracle = new MealyCounterOracle<String, String>(sulEqOracle, "equivalence queries");
-		MealyCacheOracle<String, String> cachedEqOracle = MealyCaches.createDAGCache(alphabet, statsEqOracle);
-		MealyCounterOracle<String, String> statsCachedEqOracle = new MealyCounterOracle<String, String>(cachedEqOracle, "equivalence queries hit cache");
-		MealyEquivalenceOracle<String, String> consistencyEqOracle = cachedMemOracle.createCacheConsistencyTest();
 
 		
 		LearningAlgorithm.MealyLearner<String,String> learn;
@@ -448,8 +496,7 @@ public final class Polca {
 			break;
 		
 		}
-		
-		boolean random_ce = true;
+
 		MealyMachine<?, String, ?, String> hyp = null;
 		DefaultQuery<String, Word<String>> ce = null;
 
@@ -479,32 +526,13 @@ public final class Polca {
 					PrintStream fileOut = new PrintStream(".model.tmp");
 					GraphDOT.write(hyp, alphabet, fileOut); // may throw IOException!
 					fileOut.close();
-				} catch (IOException e) {}
+				} catch (IOException e) {
+				}
 			}
 
-			if (this.config.is_random) {
-				if (this.config.no_cache) {
-					MealyEquivalenceOracle<String, String> randomWpMethod = new MealyRandomWpMethodEQOracle<>(statsEqOracle, this.config.r_min, this.config.r_len, this.config.r_bound);
-					ce = randomWpMethod.findCounterExample(hyp, alphabet);
-				} else {
-					MealyEquivalenceOracle<String, String> randomWpMethod = new MealyRandomWpMethodEQOracle<>(statsCachedEqOracle, this.config.r_min, this.config.r_len, this.config.r_bound);
-					MealyEQOracleChain<String, String> eqOracle = new MealyEQOracleChain<>(consistencyEqOracle, randomWpMethod);
-					ce = eqOracle.findCounterExample(hyp, alphabet);
-				}
-				random_ce = (ce != null);
-			}
-
-			if (!this.config.is_random || !random_ce) {
-				if (this.config.no_cache) {
-					MealyEquivalenceOracle<String, String> wpMethod = new MealyWpMethodEQOracle<>(statsEqOracle, this.config.max_depth);
-					ce = wpMethod.findCounterExample(hyp, alphabet);
-				} else {
-					MealyEquivalenceOracle<String, String> wpMethod = new MealyWpMethodEQOracle<>(statsCachedEqOracle, this.config.max_depth);
-					MealyEQOracleChain<String, String> eqOracle = new MealyEQOracleChain<>(consistencyEqOracle, wpMethod);
-					ce = eqOracle.findCounterExample(hyp, alphabet);
-				}
-				random_ce = true;
-			}
+			MealyEquivalenceOracle<String, String> eqOracle = new MealyRandomWordsEQOracle<>(effMemOracle,
+					this.config.r_min, this.config.r_len, limit);
+			ce = eqOracle.findCounterExample(hyp, alphabet);
 
 			if (!this.config.silent) System.out.println("ce : " + ce);
 
