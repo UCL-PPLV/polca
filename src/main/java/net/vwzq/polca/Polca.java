@@ -373,13 +373,15 @@ public final class Polca {
 			constructor = (sulOracle -> new ExtensibleLStarMealy<>(alphabet, sulOracle, Collections.emptyList(),
 					ObservationTableCEXHandlers.RIVEST_SCHAPIRE, ClosingStrategies.CLOSE_SHORTEST));
 
+			System.out.println("# Learning reference...");
 			MealyMachine<?, String, ?, String> reference = learnReference();
+			System.out.println("# Finished learning reference.");
 
-			PAR learn = new PAR(constructor, queryOracle, alphabet, this.config.r_bound * 2, this.config.revision_ratio,
+			PAR learn = new PAR(constructor, queryOracle, alphabet, this.config.r_bound, this.config.revision_ratio,
 					this.config.length_factor, false, random, counterOracle.getCounter());
 			List<Pair<Integer, MealyMachine<?, String, ?, String>>> res = learn.run();
 
-			res = toLifetime(res, this.config.r_bound * 2);
+			res = toLifetime(res, this.config.r_bound);
 
 			Integer correct = 0;
 			for (Pair<Integer, MealyMachine<?, String, ?, String>> pair : res) {
@@ -388,7 +390,7 @@ public final class Polca {
 				}
 			}
 
-			System.out.println("# CORRECT RATIO: " + correct + " / " + this.config.r_bound * 2);
+			System.out.println("# CORRECT RATIO: " + correct + " / " + this.config.r_bound);
 			System.out.println("# SEED: " + seed);
 
 			hyp = res.get(res.size()-1).getSecond();
@@ -538,6 +540,7 @@ public final class Polca {
 
 		} while (ce != null);
 
+		System.out.println("Reference queries: " + (statsMemOracle.getCount() * this.config.repetitions));
 		return hyp;
 	}
 }
